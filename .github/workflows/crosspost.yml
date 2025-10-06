@@ -17,6 +17,14 @@ on:
         description: "Set to 'true' for verbose logs."
         required: false
         default: ""
+      require_images:
+        description: "Set to 'true' to post only when images are present (prevents link-only card posts)."
+        required: false
+        default: ""
+      bluesky_filter:
+        description: "Bluesky 'filter' (e.g., posts_with_media, posts_no_replies, posts_with_video)."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -31,12 +39,14 @@ jobs:
       MASTODON_BASE_URL: ${{ secrets.MASTODON_BASE_URL }}
       MASTODON_ACCESS_TOKEN: ${{ secrets.MASTODON_ACCESS_TOKEN }}
 
-      # Optional (Inputs → Repo vars → fallback)
+      # Optional (Inputs → Repo vars → defaults)
       FETCH_LIMIT: ${{ github.event.inputs.fetch_limit || vars.FETCH_LIMIT || '20' }}
       MASTODON_VISIBILITY: ${{ vars.MASTODON_VISIBILITY || 'public' }}
       MASTODON_MAX_CHARS: ${{ vars.MASTODON_MAX_CHARS || '500' }}
 
-      # NEW: dry-run / verbose flags (strings like 'true'/'false', handled in script)
+      # New: filter/guards & runtime flags
+      BLUESKY_FILTER: ${{ github.event.inputs.bluesky_filter || vars.BLUESKY_FILTER || 'posts_with_media' }}
+      REQUIRE_IMAGES: ${{ github.event.inputs.require_images || vars.REQUIRE_IMAGES || 'true' }}
       DRY_RUN: ${{ github.event.inputs.dry_run || vars.DRY_RUN || 'false' }}
       VERBOSE: ${{ github.event.inputs.verbose || vars.VERBOSE || 'false' }}
 
@@ -73,7 +83,7 @@ jobs:
 
       - name: Run crossposter
         run: |
-          # CLI flags not needed; env DRY_RUN/VERBOSE are picked up by the script.
+          # CLI flags not needed; env DRY_RUN/VERBOSE/REQUIRE_IMAGES/BLUESKY_FILTER are picked up by the script.
           python bsky_to_masto.py
 
       - name: Save state cache
@@ -87,4 +97,4 @@ jobs:
         if: always()
         run: |
           echo "Run complete on $(date -u '+%Y-%m-%d %H:%M:%SZ')." >> $GITHUB_STEP_SUMMARY
-          echo "Dry-run: $DRY_RUN  |  Verbose: $VERBOSE" >> $GITHUB_STEP_SUMMARY
+          echo "Dry-run: $DRY_RUN  |  Verbose: $VERBOSE  |  Require images: $REQUIRE_IMAGES  |  Filter: $BLUESKY_FILTER" >> $GITHUB_STEP_SUMMARY
