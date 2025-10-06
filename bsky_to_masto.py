@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 Bluesky → Mastodon crossposter (no Bluesky login).
-- Fetches public posts from a Bluesky handle
+- Fetches public posts from a Bluesky handle (AppView public API)
 - Reposts text + images (with alt) to Mastodon
 - Adds attribution link back to Bluesky
 - Avoids duplicates via a local state file
-- NEW: --dry-run and --verbose switches (or DRY_RUN / VERBOSE env vars)
+- Filters strictly to posts authored by the target (skip reposts & non-author items)
+- Supports --dry-run and --verbose switches
 
 Requirements:
   pip install requests python-dotenv
@@ -50,6 +51,7 @@ DRY_RUN = _args.dry_run or strtobool(os.getenv("DRY_RUN"))
 VERBOSE = _args.verbose or strtobool(os.getenv("VERBOSE"))
 
 BLUESKY_HANDLE = os.getenv("BLUESKY_HANDLE", "").strip()
+BLUESKY_FILTER = os.getenv("BLUESKY_FILTER", "posts_with_media")  # media-only by default
 MASTO_BASE = os.getenv("MASTODON_BASE_URL", "").rstrip("/")
 MASTO_TOKEN = os.getenv("MASTODON_ACCESS_TOKEN", "").strip()
 STATE_FILE = os.getenv("STATE_FILE", "sync_state.json")
@@ -90,7 +92,6 @@ def validate_config():
     if not MASTO_BASE:
         missing.append("MASTODON_BASE_URL")
     if not MASTO_TOKEN and not DRY_RUN:
-        # Token only required when actually posting
         missing.append("MASTODON_ACCESS_TOKEN")
 
     if missing:
@@ -100,6 +101,7 @@ def validate_config():
     if VERBOSE:
         info("Configuration:")
         info(f"  BLUESKY_HANDLE={BLUESKY_HANDLE}")
+        info(f"  BLUESKY_FILTER={BLUESKY_FILTER}")
         info(f"  MASTODON_BASE_URL={MASTO_BASE}")
         info(f"  STATE_FILE={STATE_FILE}")
         info(f"  MASTODON_VISIBILITY={MASTO_VISIBILITY}")
@@ -128,10 +130,24 @@ def save_state(path: str, state: Dict) -> None:
 
 
 # --------- Bluesky API ---------
+def bsky_get_profile(handle: str) -> dict:
+    """
+    Resolve a Bluesky handle to its DID (public endpoint).
+    """
+    url = f"{APPVIEW}/xrpc/app.bsky.actor.getProfile"
+    r = requests.get(url, params={"actor": handle}, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
 def bsky_get_author_feed(handle: str, cursor: Optional[str] = None, limit: int = 20) -> Dict:
+    """
+    GET app.bsky.feed.getAuthorFeed (no auth required).
+    Supports `filter` values like posts_with_media, posts_no_replies, etc.
+    """
     params = {
         "actor": handle,
-        "filter": "posts_no_replies",
+        "filter": BLUESKY_FILTER,
         "limit": min(max(1, limit), 100),
     }
     if cursor:
@@ -144,11 +160,18 @@ def bsky_get_author_feed(handle: str, cursor: Optional[str] = None, limit: int =
 
 
 def bsky_post_url_from_uri(author_handle: str, at_uri: str) -> str:
+    # at://did:plc:.../app.bsky.feed.post/<rkey>  → https://bsky.app/profile/<handle>/post/<rkey>
     rkey = at_uri.split("/")[-1]
     return f"https://bsky.app/profile/{author_handle}/post/{rkey}"
 
 
 def extract_images_from_embed(embed_obj: Optional[Dict]) -> List[Dict]:
+    """
+    Returns [{url: <img_url>, alt: <alt>}]
+    Supports:
+      - app.bsky.embed.images#view
+      - app.bsky.embed.recordWithMedia#view (when media is images)
+    """
     images: List[Dict] = []
     if not embed_obj or not isinstance(embed_obj, dict):
         return images
@@ -167,14 +190,17 @@ def extract_images_from_embed(embed_obj: Optional[Dict]) -> List[Dict]:
         if media.get("$type") == "app.bsky.embed.images#view":
             pull(media)
 
-    return images[:4]
+    return images[:4]  # Mastodon supports up to 4 images per status
 
 
 # --------- Mastodon API ---------
 def masto_upload_image(img_bytes: bytes, filename: str, alt_text: str) -> str:
+    """
+    Upload to /api/v2/media (async for large). Poll /api/v1/media/:id until ready (url present).
+    Returns media id.
+    """
     if DRY_RUN:
         vlog(f"[dry-run] Would upload image: filename={filename}, alt='{alt_text[:60]}'")
-        # Simulate a media id
         return f"dryrun-media-{int(time.time()*1000)}"
 
     mime_type, _ = mimetypes.guess_type(filename)
@@ -192,10 +218,11 @@ def masto_upload_image(img_bytes: bytes, filename: str, alt_text: str) -> str:
     media = r.json()
     media_id = media["id"]
 
+    # If asynchronous (202 or url is null), poll until ready.
     if r.status_code == 202 or not media.get("url"):
         status_url = f"{MASTO_BASE}/api/v1/media/{media_id}"
         vlog(f"Polling media until ready: {status_url}")
-        for _ in range(60):
+        for _ in range(60):  # up to ~60s
             time.sleep(1)
             rr = requests.get(status_url, headers=HEADERS_AUTH, timeout=30)
             rr.raise_for_status()
@@ -240,7 +267,6 @@ def safe_truncate_for_masto(text: str, link: str, max_chars: int) -> str:
 def download_bytes(url: str) -> Tuple[bytes, str]:
     if DRY_RUN:
         vlog(f"[dry-run] Would download image bytes from: {url}")
-        # Return empty bytes with a guessed filename; not used in dry-run
         return b"", "bsky.jpg"
     vlog(f"Downloading image: {url}")
     r = requests.get(url, timeout=120)
@@ -260,6 +286,15 @@ def download_bytes(url: str) -> Tuple[bytes, str]:
 def main():
     validate_config()
 
+    # STEP 1: Resolve DID for reliable author filtering (public endpoint)
+    profile = bsky_get_profile(BLUESKY_HANDLE)
+    target_did = profile.get("did")
+    if not target_did:
+        err(f"Could not resolve DID for handle {BLUESKY_HANDLE}")
+        sys.exit(1)
+    if VERBOSE:
+        info(f"Resolved {BLUESKY_HANDLE} → DID {target_did}")
+
     state = load_state(STATE_FILE)
     seen = set(state.get("synced_uris", []))
 
@@ -275,19 +310,32 @@ def main():
         uri = post.get("uri")
         if not uri:
             continue
+
         if uri in seen:
             vlog(f"Skipping already-synced post: {uri}")
             continue
 
+        # STEP 2a: Skip reposts (feed includes reposts via "reason")
+        reason = item.get("reason") or {}
+        if reason.get("$type") == "app.bsky.feed.defs#reasonRepost":
+            vlog(f"Skipping repost by {BLUESKY_HANDLE}: {uri}")
+            continue
+
+        # STEP 2b: Keep ONLY posts authored by the target account (compare DID)
+        author = post.get("author") or {}
+        if author.get("did") != target_did:
+            vlog(f"Skipping non-author post from {author.get('handle')} for uri={uri}")
+            continue
+
         record = post.get("record") or {}
         text = record.get("text", "") or ""
-        author = post.get("author") or {}
         author_handle = author.get("handle") or BLUESKY_HANDLE
 
         attribution = bsky_post_url_from_uri(author_handle, uri)
         status = safe_truncate_for_masto(text, attribution, MASTO_MAX_CHARS)
         vlog(f"Prepared status length={len(status)} for uri={uri}")
 
+        # Images (if any)
         embed = post.get("embed")
         image_entries = extract_images_from_embed(embed)
         if image_entries:
@@ -310,7 +358,7 @@ def main():
                 new_synced.append(uri)
             else:
                 info(f"[dry-run] Would mark as synced: {uri}")
-            time.sleep(1)
+            time.sleep(1)  # be polite
         except Exception as e:
             err(f"Failed to post status for {uri}: {e}")
 
