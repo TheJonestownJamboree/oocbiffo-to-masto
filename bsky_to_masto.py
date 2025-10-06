@@ -7,6 +7,7 @@ Bluesky → Mastodon crossposter (no Bluesky login).
 - Avoids duplicates via a local state file
 - Filters strictly to posts authored by the target (skip reposts & non-author items)
 - Supports --dry-run and --verbose switches
+- Guard to avoid link-only "card" duplicates: REQUIRE_IMAGES=true
 
 Requirements:
   pip install requests python-dotenv
@@ -58,6 +59,7 @@ STATE_FILE = os.getenv("STATE_FILE", "sync_state.json")
 MASTO_VISIBILITY = os.getenv("MASTODON_VISIBILITY", "public")
 MASTO_MAX_CHARS = int(os.getenv("MASTODON_MAX_CHARS", "500"))
 FETCH_LIMIT = int(os.getenv("FETCH_LIMIT", "20"))  # Bluesky fetch batch size (≤100)
+REQUIRE_IMAGES = os.getenv("REQUIRE_IMAGES", "false").strip().lower() in ("1","true","yes","y","on")
 
 HEADERS_JSON = {
     "Authorization": f"Bearer {MASTO_TOKEN}",
@@ -107,6 +109,7 @@ def validate_config():
         info(f"  MASTODON_VISIBILITY={MASTO_VISIBILITY}")
         info(f"  MASTODON_MAX_CHARS={MASTO_MAX_CHARS}")
         info(f"  FETCH_LIMIT={FETCH_LIMIT}")
+        info(f"  REQUIRE_IMAGES={REQUIRE_IMAGES}")
         info(f"  DRY_RUN={DRY_RUN}")
         info(f"  VERBOSE={VERBOSE}")
 
@@ -143,7 +146,7 @@ def bsky_get_profile(handle: str) -> dict:
 def bsky_get_author_feed(handle: str, cursor: Optional[str] = None, limit: int = 20) -> Dict:
     """
     GET app.bsky.feed.getAuthorFeed (no auth required).
-    Supports `filter` values like posts_with_media, posts_no_replies, etc.
+    Supports `filter` values like posts_with_media, posts_no_replies, posts_with_video, etc.
     """
     params = {
         "actor": handle,
@@ -286,7 +289,7 @@ def download_bytes(url: str) -> Tuple[bytes, str]:
 def main():
     validate_config()
 
-    # STEP 1: Resolve DID for reliable author filtering (public endpoint)
+    # Resolve DID for reliable author filtering (public endpoint)
     profile = bsky_get_profile(BLUESKY_HANDLE)
     target_did = profile.get("did")
     if not target_did:
@@ -315,13 +318,13 @@ def main():
             vlog(f"Skipping already-synced post: {uri}")
             continue
 
-        # STEP 2a: Skip reposts (feed includes reposts via "reason")
+        # Skip reposts (feed includes reposts via "reason")
         reason = item.get("reason") or {}
         if reason.get("$type") == "app.bsky.feed.defs#reasonRepost":
             vlog(f"Skipping repost by {BLUESKY_HANDLE}: {uri}")
             continue
 
-        # STEP 2b: Keep ONLY posts authored by the target account (compare DID)
+        # Keep ONLY posts authored by the target account (compare DID)
         author = post.get("author") or {}
         if author.get("did") != target_did:
             vlog(f"Skipping non-author post from {author.get('handle')} for uri={uri}")
@@ -340,6 +343,18 @@ def main():
         image_entries = extract_images_from_embed(embed)
         if image_entries:
             vlog(f"Found {len(image_entries)} image(s) for uri={uri}")
+
+        # === Guards to avoid link-only duplicate posts ===
+        # Require images if configured (skips link-only posts that render as a card)
+        if REQUIRE_IMAGES and not image_entries:
+            vlog(f"Skipping post without images to avoid link-card duplicate: {uri}")
+            continue
+        # Also skip when status would be only the attribution link
+        only_attribution = status.strip().lower().startswith("original bluesky: ") and (not image_entries)
+        if only_attribution:
+            vlog(f"Skipping link-only/attribution-only status: {uri}")
+            continue
+        # ================================================
 
         media_ids: List[str] = []
         for idx, img in enumerate(image_entries):
