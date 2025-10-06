@@ -9,26 +9,37 @@ on:
         description: "Fetch limit (1..100). If empty, uses repository variable or default."
         required: false
         default: ""
+      dry_run:
+        description: "Set to 'true' for dry-run (no posting, no state changes)."
+        required: false
+        default: ""
+      verbose:
+        description: "Set to 'true' for verbose logs."
+        required: false
+        default: ""
 
 permissions:
   contents: read
-  actions: write   # needed for actions/cache save
+  actions: write
 
 jobs:
   crosspost:
     runs-on: ubuntu-latest
     env:
-      # Required (from Secrets)
+      # Required (Secrets)
       BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
       MASTODON_BASE_URL: ${{ secrets.MASTODON_BASE_URL }}
       MASTODON_ACCESS_TOKEN: ${{ secrets.MASTODON_ACCESS_TOKEN }}
 
-      # Optional (from dispatch input → repo vars → hardcoded fallback)
+      # Optional (Inputs → Repo vars → fallback)
       FETCH_LIMIT: ${{ github.event.inputs.fetch_limit || vars.FETCH_LIMIT || '20' }}
       MASTODON_VISIBILITY: ${{ vars.MASTODON_VISIBILITY || 'public' }}
       MASTODON_MAX_CHARS: ${{ vars.MASTODON_MAX_CHARS || '500' }}
 
-      # State file (kept in workspace; persisted via cache)
+      # NEW: dry-run / verbose flags (strings like 'true'/'false', handled in script)
+      DRY_RUN: ${{ github.event.inputs.dry_run || vars.DRY_RUN || 'false' }}
+      VERBOSE: ${{ github.event.inputs.verbose || vars.VERBOSE || 'false' }}
+
       STATE_FILE: sync_state.json
 
     steps:
@@ -45,7 +56,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Restore last known state (synced URIs) so we don't duplicate posts
       - name: Restore state cache
         id: cache-restore
         uses: actions/cache/restore@v4
@@ -57,18 +67,17 @@ jobs:
             bsky-masto-state-${{ runner.os }}-
             bsky-masto-state-
 
-      # Ensure the state file exists even on first run
       - name: Initialize state file if missing
         run: |
           test -f "${STATE_FILE}" || echo '{"synced_uris":[]}' > "${STATE_FILE}"
 
       - name: Run crossposter
         run: |
+          # CLI flags not needed; env DRY_RUN/VERBOSE are picked up by the script.
           python bsky_to_masto.py
 
-      # Save updated state with key that changes when file content changes
       - name: Save state cache
-        if: always()
+        if: ${{ always() && env.DRY_RUN != 'true' && env.DRY_RUN != '1' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ env.STATE_FILE }}
@@ -78,3 +87,4 @@ jobs:
         if: always()
         run: |
           echo "Run complete on $(date -u '+%Y-%m-%d %H:%M:%SZ')." >> $GITHUB_STEP_SUMMARY
+          echo "Dry-run: $DRY_RUN  |  Verbose: $VERBOSE" >> $GITHUB_STEP_SUMMARY
