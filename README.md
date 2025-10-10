@@ -19,8 +19,6 @@
 3. Copy the `crosspost.yml` file into `.github/workflows`
 
 ### 3. Create the secrets and variables
-> If cloning, the secrets/variables should clone with the repo. You may just need to edit or update them.
-
 1. Go to **Settings** of the repo and navigate to **Secrets and variables** under the **Security** section.
 2. Click **Actions**.
 
