@@ -63,7 +63,7 @@ If you want to have multiple of these mirror thingies, you can just clone your f
 
 ### Variables
 You can manipulate some of the variables to do different things:
-- `BLUESKY_FILTER` this defaults to "posts_with_media" other options could be "posts_with_video", "posts_with_replies"; etc. This is from [app.bsky.feed.get_author_feed](https://atproto.blue/en/latest/atproto/atproto_client.models.app.bsky.feed.get_author_feed.html).
+- `BLUESKY_FILTER` this defaults to "posts_with_media" other options could be "posts_with_video", "posts_with_replies"; etc. This is from [app.bsky.feed.get_author_feed](https://atproto.blue/en/latest/atproto/atproto_client.models.app.bsky.feed.get_author_feed.html). I don't know or care or test anything but "posts_with_media" because this is to pull funny animal pics and shit from bsky. Any other option would require testing on your own.
 - `DRY-RUN` toggles dry running the script can be "true" or "false".
 - `FETCH_LIMIT` limits requests per run default is 20, bsky api allows up to 100.
 - `MASTODON_MAX_CHARS` default is 500 on most instances, this keeps things consistant since non-default instances can have more.
