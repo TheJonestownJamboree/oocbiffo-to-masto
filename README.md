@@ -51,7 +51,12 @@ Under normal conditions, you shouldn't have verbose set to true. It's really onl
 
 The crossposter runs every 10 minutes. You can change that in the .github/workflows/crosspost.yml file by editing the `cron:` line using good old fashion cron style scheduling.
 
->The workflow actions of github are notoriously unreliable. Since this was created to mirror stupid little image bot accounts from bsky to Mastodon, its failure at being constistant isn't a big deal. 
+>The workflow actions of github are notoriously unreliable. Since this was created to mirror stupid little image bot accounts from bsky to Mastodon, its failure at being constistant isn't a big deal.
+>Also remember that in order for the Workflow Action to actually run, you have to have alla the files in the main default repo. If you stick in a non-default branch of the repo, it will not run.
+
+If you want to have multiple of these mirror thingies, you can just clone your first one to another repo and change the secrets (and remember to make a new masto account).
+
+>When you make a mirror Mastodon account, don't forget to mark it as an automated account! It's also usually good manners to put something in the profile that it's a mirror and link back to the OG bluesky one.
 
 ### Variables
 You can manipulate some of the variables to do different things:
