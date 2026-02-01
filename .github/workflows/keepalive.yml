@@ -1,0 +1,13 @@
+name: Keepalive Workflow
+on:
+  schedule:
+    - cron: '0 0 1 * *' # Runs once a month
+  workflow_dispatch:   # Lets you run it manually if needed
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - uses: liskin/gh-workflow-keepalive@v1
