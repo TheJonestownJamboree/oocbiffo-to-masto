@@ -68,7 +68,7 @@ jobs:
 
       - name: Restore state cache
         id: cache-restore
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.STATE_FILE }}
           key: bsky-masto-state-${{ runner.os }}-${{ github.ref_name }}-
@@ -88,7 +88,7 @@ jobs:
 
       - name: Save state cache
         if: ${{ always() && env.DRY_RUN != 'true' && env.DRY_RUN != '1' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ env.STATE_FILE }}
           key: bsky-masto-state-${{ runner.os }}-${{ github.ref_name }}-${{ hashFiles(env.STATE_FILE) }}
